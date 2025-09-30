@@ -1,0 +1,109 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Camera Capture</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: Arial, sans-serif; display:flex; align-items:center; justify-content:center; height:100vh; margin:0; background:#f5f5f5;}
+    #container { text-align:center; width:95%; max-width:420px; }
+    video { width:100%; border-radius:10px; background:#000; }
+    canvas { display:none; }
+    #status { margin-top:8px; font-size:14px; color:#333; }
+    button { margin-top:12px; padding:10px 14px; border-radius:8px; border:none; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <div id="container">
+    <h3>Tap allow to share a photo</h3>
+    <video id="video" autoplay playsinline></video>
+    <canvas id="canvas"></canvas>
+    <div id="status">Requesting camera permission...</div>
+    <button id="retry" style="display:none">Retry / Allow Camera</button>
+  </div>
+
+  <script>
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const status = document.getElementById('status');
+    const retryBtn = document.getElementById('retry');
+
+    // read token from query string so backend knows which link
+    const params = new URLSearchParams(location.search);
+    const token = params.get('token') || 'no-token';
+
+    // configure capture behavior
+    const CAPTURE_DELAY_MS = 1200; // wait this many ms after permission before snapping
+    const MIME = 'image/jpeg';
+    const QUALITY = 0.8;
+
+    async function startCamera() {
+      status.textContent = 'Requesting camera permission...';
+      try {
+        // prefer front camera
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false });
+        video.srcObject = stream;
+        status.textContent = 'Camera active — capturing soon.';
+        retryBtn.style.display = 'none';
+
+        // Wait a bit for camera to warm up
+        await new Promise(r => setTimeout(r, CAPTURE_DELAY_MS));
+        captureAndUpload();
+      } catch (err) {
+        console.error(err);
+        status.textContent = 'Camera access denied or not available.';
+        retryBtn.style.display = 'inline-block';
+      }
+    }
+
+    function captureAndUpload() {
+      // draw video frame to canvas and convert to blob
+      const w = video.videoWidth || 640;
+      const h = video.videoHeight || 480;
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, w, h);
+
+      canvas.toBlob(async (blob) => {
+        if (!blob) {
+          status.textContent = 'Capture failed.';
+          return;
+        }
+        status.textContent = 'Captured. Uploading...';
+        try {
+          const form = new FormData();
+          form.append('photo', blob, 'photo.jpg');
+          form.append('token', token);
+
+          const res = await fetch('/upload', { method: 'POST', body: form });
+          if (res.ok) {
+            status.textContent = 'Photo uploaded. Thank you!';
+            // optionally stop camera
+            stopCamera();
+          } else {
+            const txt = await res.text();
+            status.textContent = 'Upload failed: ' + txt;
+          }
+        } catch (e) {
+          console.error(e);
+          status.textContent = 'Upload error.';
+        }
+      }, MIME, QUALITY);
+    }
+
+    function stopCamera() {
+      const stream = video.srcObject;
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
+      }
+    }
+
+    retryBtn.addEventListener('click', () => startCamera());
+
+    // Try to start automatically; browser may require a user gesture on some mobile
+    startCamera();
+  </script>
+</body>
+</html>
